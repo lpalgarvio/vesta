@@ -1,23 +1,29 @@
 #!/bin/bash
+# Vesta Ubuntu installer v.05 for Debian
+# http://vestacp.com
 
-# Vesta Debian installer v.05
+
+#----------------------------------------------------------#
+#                  System information                      #
+#----------------------------------------------------------#
+
+memory=$(grep 'MemTotal' /proc/meminfo | tr ' ' '\n' | grep [0-9]);
+arch=$(uname -i);
+
 
 #----------------------------------------------------------#
 #                  Variables&Functions                     #
 #----------------------------------------------------------#
-export PATH=$PATH:/sbin
-export DEBIAN_FRONTEND=noninteractive
-RHOST='apt.vestacp.com'
-CHOST='c.vestacp.com'
-VERSION='debian'
-VESTA='/usr/local/vesta'
-memory=$(grep 'MemTotal' /proc/meminfo |tr ' ' '\n' |grep [0-9])
-arch=$(uname -i)
-os='debian'
-release=$(cat /etc/debian_version|grep -o [0-9]|head -n1)
-codename="$(cat /etc/os-release |grep VERSION= |cut -f 2 -d \(|cut -f 1 -d \))"
-vestacp="http://$CHOST/$VERSION/$release"
+export DEBIAN_FRONTEND="noninteractive";
+export PATH="$PATH:/sbin";
+VESTA='/usr/local/vesta';
+CHOST="c.vestacp.com";
+RHOST="apt.vestacp.com";
+vestacp_files_url="https://$CHOST/$os/$release";
+vestacp_gpgkey_url="https://$CHOST/deb_signing.key";
+vestacp_repo_url="https://${RHOST}/${codename}";
 
+# Set software list
 if [ "$release" -eq 9 ]; then
     software="nginx apache2 apache2-utils apache2-suexec-custom
         libapache2-mod-ruid2 libapache2-mod-fcgid libapache2-mod-php php
@@ -76,7 +82,9 @@ help() {
   -t, --spamassassin      Install SpamAssassin  [yes|no]  default: yes
   -i, --iptables          Install Iptables      [yes|no]  default: yes
   -b, --fail2ban          Install Fail2ban      [yes|no]  default: yes
+  -r, --repos             Install extra repos   [yes|no]  default: yes
   -o, --softaculous       Install Softaculous   [yes|no]  default: yes
+  -u, --upgrade           Upgrade system        [yes|no]  default: no
   -q, --quota             Filesystem Quota      [yes|no]  default: no
   -l, --lang              Default language                default: en
   -y, --interactive       Interactive install   [yes|no]  default: yes
@@ -163,8 +171,9 @@ for arg; do
         --spamassassin)         args="${args}-t " ;;
         --iptables)             args="${args}-i " ;;
         --fail2ban)             args="${args}-b " ;;
-        --remi)                 args="${args}-r " ;;
+        --repos)                args="${args}-r " ;;
         --softaculous)          args="${args}-o " ;;
+        --upgrade)              args="${args}-u " ;;
         --quota)                args="${args}-q " ;;
         --lang)                 args="${args}-l " ;;
         --interactive)          args="${args}-y " ;;
@@ -197,8 +206,9 @@ while getopts "a:n:w:v:j:k:m:g:d:x:z:c:t:i:b:r:o:q:l:y:s:e:p:fh" Option; do
         t) spamd=$OPTARG ;;             # SpamAssassin
         i) iptables=$OPTARG ;;          # Iptables
         b) fail2ban=$OPTARG ;;          # Fail2ban
-        r) remi=$OPTARG ;;              # Remi repo
+        r) repos=$OPTARG ;;             # Extra repos
         o) softaculous=$OPTARG ;;       # Softaculous plugin
+        u) upgrade=$OPTARG ;;           # Upgrade system
         q) quota=$OPTARG ;;             # FS Quota
         l) lang=$OPTARG ;;              # Language
         y) interactive=$OPTARG ;;       # Interactive install
@@ -232,7 +242,9 @@ else
 fi
 set_default_value 'iptables' 'yes'
 set_default_value 'fail2ban' 'yes'
+set_default_value 'repos' 'yes'
 set_default_value 'softaculous' 'yes'
+set_default_value 'upgrade' 'no'
 set_default_value 'quota' 'no'
 set_default_value 'interactive' 'yes'
 set_default_lang 'en'
@@ -274,7 +286,7 @@ if [ ! -e '/usr/bin/wget' ]; then
 fi
 
 # Checking repository availability
-wget -q "$vestacp/deb_signing.key" -O /dev/null
+wget -q "${vestacp_gpgkey_url}" -O /dev/null
 check_result $? "No access to Vesta repository"
 
 # Check installed packages
@@ -463,20 +475,59 @@ fi
 #                   Install repository                     #
 #----------------------------------------------------------#
 
-# Updating system
-apt-get -y upgrade
-check_result $? 'apt-get upgrade failed'
+# Package Management System repositories
+pms_repos="/etc/apt/sources.list.d";
+
+# Updating repository information
+apt-get update;
+
+# Upgrading system
+if [ "$upgrade" = 'yes' ]; then
+  apt-get -y upgrade;
+  check_result $? 'apt-get upgrade failed';
+fi;
+
+# Installing dotdeb repo
+if [ "$repos" = 'yes' ]; then
+  # Wheezy/7 and Jessie/8
+  if [ "$codename" == "wheezy" ] || [ "$codename" == "jessie" ]; then
+    wget -O- https://www.dotdeb.org/dotdeb.gpg | apt-key add -;
+    bash -c "cat << EOF > ${pms_repos}/dotdeb.list
+# Dotdeb repository
+deb https://packages.dotdeb.org/ ${codename}-php56 all
+deb-src https://packages.dotdeb.org/ ${codename}-php56 all
+EOF";
+  fi;
+fi;
+
+# Installing sury repo
+if [ "$repos" = 'yes' ]; then
+  # Jessie/8 and Stretch/9
+  if [ "$codename" == "jessie" ] || [ "$codename" == "stretch" ]; then
+    wget -O- https://packages.sury.org/php/apt.gpg | apt-key add -;
+    bash -c "cat << EOF > ${pms_repos}/sury-php.list
+# Sury PHP repository
+deb https://packages.sury.org/php/ ${codename} main
+EOF";
+  fi;
+fi;
 
 # Installing nginx repo
-apt=/etc/apt/sources.list.d
-echo "deb http://nginx.org/packages/debian/ $codename nginx" > $apt/nginx.list
-wget http://nginx.org/keys/nginx_signing.key -O /tmp/nginx_signing.key
-apt-key add /tmp/nginx_signing.key
+wget -O- https://nginx.org/keys/nginx_signing.key | apt-key add -;
+bash -c "cat << EOF > ${pms_repos}/nginx.list
+# nginx repository
+deb https://nginx.org/packages/mainline/${os}/ ${codename} nginx
+EOF";
 
 # Installing vesta repo
-echo "deb http://$RHOST/$codename/ $codename vesta" > $apt/vesta.list
-wget $CHOST/deb_signing.key -O deb_signing.key
-apt-key add deb_signing.key
+wget -O- "${vestacp_gpgkey_url}" | apt-key add -;
+bash -c "cat << EOF > ${pms_repos}/vesta.list
+# VestaCP repository
+deb ${vestacp_repo_url}/ ${codename} vesta
+EOF";
+
+# Updating repository information
+apt-get update;
 
 
 #----------------------------------------------------------#
@@ -629,9 +680,6 @@ fi
 #                     Install packages                     #
 #----------------------------------------------------------#
 
-# Update system packages
-apt-get update
-
 # Disable daemon autostart /usr/share/doc/sysv-rc/README.policy-rc.d.gz
 echo -e '#!/bin/sh \nexit 101' > /usr/sbin/policy-rc.d
 chmod a+x /usr/sbin/policy-rc.d
@@ -684,7 +732,7 @@ chmod 755 /usr/bin/rssh
 
 # Downloading sudo configuration
 mkdir -p /etc/sudoers.d
-wget $vestacp/sudo/admin -O /etc/sudoers.d/admin
+wget $vestacp_files_url/sudo/admin -O /etc/sudoers.d/admin
 chmod 440 /etc/sudoers.d/admin
 
 # Configuring system env
@@ -696,7 +744,7 @@ echo 'export PATH' >> /root/.bash_profile
 source /root/.bash_profile
 
 # Configuring logrotate for vesta logs
-wget $vestacp/logrotate/vesta -O /etc/logrotate.d/vesta
+wget $vestacp_files_url/logrotate/vesta -O /etc/logrotate.d/vesta
 
 # Building directory tree and creating some blank files for vesta
 mkdir -p $VESTA/conf $VESTA/log $VESTA/ssl $VESTA/data/ips \
@@ -810,12 +858,12 @@ echo "VERSION='0.9.8'" >> $VESTA/conf/vesta.conf
 
 # Downloading hosting packages
 cd $VESTA/data
-wget $vestacp/packages.tar.gz -O packages.tar.gz
+wget $vestacp_files_url/packages.tar.gz -O packages.tar.gz
 tar -xzf packages.tar.gz
 rm -f packages.tar.gz
 
 # Downloading templates
-wget $vestacp/templates.tar.gz -O templates.tar.gz
+wget $vestacp_files_url/templates.tar.gz -O templates.tar.gz
 tar -xzf templates.tar.gz
 rm -f templates.tar.gz
 
@@ -824,7 +872,7 @@ cp templates/web/skel/public_html/index.html /var/www/
 sed -i 's/%domain%/It worked!/g' /var/www/index.html
 
 # Downloading firewall rules
-wget $vestacp/firewall.tar.gz -O firewall.tar.gz
+wget $vestacp_files_url/firewall.tar.gz -O firewall.tar.gz
 tar -xzf firewall.tar.gz
 rm -f firewall.tar.gz
 
@@ -855,12 +903,12 @@ rm /tmp/vst.pem
 
 if [ "$nginx" = 'yes' ]; then
     rm -f /etc/nginx/conf.d/*.conf
-    wget $vestacp/nginx/nginx.conf -O /etc/nginx/nginx.conf
-    wget $vestacp/nginx/status.conf -O /etc/nginx/conf.d/status.conf
-    wget $vestacp/nginx/phpmyadmin.inc -O /etc/nginx/conf.d/phpmyadmin.inc
-    wget $vestacp/nginx/phppgadmin.inc -O /etc/nginx/conf.d/phppgadmin.inc
-    wget $vestacp/nginx/webmail.inc -O /etc/nginx/conf.d/webmail.inc
-    wget $vestacp/logrotate/nginx -O /etc/logrotate.d/nginx
+    wget $vestacp_files_url/nginx/nginx.conf -O /etc/nginx/nginx.conf
+    wget $vestacp_files_url/nginx/status.conf -O /etc/nginx/conf.d/status.conf
+    wget $vestacp_files_url/nginx/phpmyadmin.inc -O /etc/nginx/conf.d/phpmyadmin.inc
+    wget $vestacp_files_url/nginx/phppgadmin.inc -O /etc/nginx/conf.d/phppgadmin.inc
+    wget $vestacp_files_url/nginx/webmail.inc -O /etc/nginx/conf.d/webmail.inc
+    wget $vestacp_files_url/logrotate/nginx -O /etc/logrotate.d/nginx
     echo > /etc/nginx/conf.d/vesta.conf
     mkdir -p /var/log/nginx/domains
     update-rc.d nginx defaults
@@ -874,9 +922,9 @@ fi
 #----------------------------------------------------------#
 
 if [ "$apache" = 'yes'  ]; then
-    wget $vestacp/apache2/apache2.conf -O /etc/apache2/apache2.conf
-    wget $vestacp/apache2/status.conf -O /etc/apache2/mods-enabled/status.conf
-    wget $vestacp/logrotate/apache2 -O /etc/logrotate.d/apache2
+    wget $vestacp_files_url/apache2/apache2.conf -O /etc/apache2/apache2.conf
+    wget $vestacp_files_url/apache2/status.conf -O /etc/apache2/mods-enabled/status.conf
+    wget $vestacp_files_url/logrotate/apache2 -O /etc/logrotate.d/apache2
     a2enmod rewrite
     a2enmod suexec
     a2enmod ssl
@@ -909,12 +957,12 @@ fi
 
 if [ "$phpfpm" = 'yes' ]; then
     if [ "$release" -eq 9 ]; then
-        wget $vestacp/php-fpm/www.conf -O /etc/php/7.0/fpm/pool.d/www.conf
+        wget $vestacp_files_url/php-fpm/www.conf -O /etc/php/7.0/fpm/pool.d/www.conf
         update-rc.d php7.0-fpm defaults
         service php7.0-fpm start
         check_result $? "php-fpm start failed"
     else
-        wget $vestacp/php5-fpm/www.conf -O /etc/php5/fpm/pool.d/www.conf
+        wget $vestacp_files_url/php5-fpm/www.conf -O /etc/php5/fpm/pool.d/www.conf
         update-rc.d php5-fpm defaults
         service php5-fpm start
         check_result $? "php-fpm start failed"
@@ -941,7 +989,7 @@ done
 #----------------------------------------------------------#
 
 if [ "$vsftpd" = 'yes' ]; then
-    wget $vestacp/vsftpd/vsftpd.conf -O /etc/vsftpd.conf
+    wget $vestacp_files_url/vsftpd/vsftpd.conf -O /etc/vsftpd.conf
     update-rc.d vsftpd defaults
     service vsftpd start
     check_result $? "vsftpd start failed"
@@ -957,7 +1005,7 @@ fi
 
 if [ "$proftpd" = 'yes' ]; then
     echo "127.0.0.1 $servername" >> /etc/hosts
-    wget $vestacp/proftpd/proftpd.conf -O /etc/proftpd/proftpd.conf
+    wget $vestacp_files_url/proftpd/proftpd.conf -O /etc/proftpd/proftpd.conf
     update-rc.d proftpd defaults
     service proftpd start
     check_result $? "proftpd start failed"
@@ -978,7 +1026,7 @@ if [ "$mysql" = 'yes' ]; then
     fi
 
     # MySQL configuration
-    wget $vestacp/mysql/$mycnf -O /etc/mysql/my.cnf
+    wget $vestacp_files_url/mysql/$mycnf -O /etc/mysql/my.cnf
     mysql_install_db
     update-rc.d mysql defaults
     service mysql start
@@ -996,10 +1044,10 @@ if [ "$mysql" = 'yes' ]; then
 
     # Configuring phpMyAdmin
     if [ "$apache" = 'yes' ]; then
-        wget $vestacp/pma/apache.conf -O /etc/phpmyadmin/apache.conf
+        wget $vestacp_files_url/pma/apache.conf -O /etc/phpmyadmin/apache.conf
         ln -s /etc/phpmyadmin/apache.conf /etc/apache2/conf.d/phpmyadmin.conf
     fi
-    wget $vestacp/pma/config.inc.php -O /etc/phpmyadmin/config.inc.php
+    wget $vestacp_files_url/pma/config.inc.php -O /etc/phpmyadmin/config.inc.php
     chmod 777 /var/lib/phpmyadmin/tmp
 fi
 
@@ -1008,16 +1056,16 @@ fi
 #----------------------------------------------------------#
 
 if [ "$postgresql" = 'yes' ]; then
-    wget $vestacp/postgresql/pg_hba.conf -O /etc/postgresql/*/main/pg_hba.conf
+    wget $vestacp_files_url/postgresql/pg_hba.conf -O /etc/postgresql/*/main/pg_hba.conf
     service postgresql restart
     sudo -u postgres psql -c "ALTER USER postgres WITH PASSWORD '$vpass'"
 
     # Configuring phpPgAdmin
     if [ "$apache" = 'yes' ]; then
-        wget $vestacp/pga/phppgadmin.conf \
+        wget $vestacp_files_url/pga/phppgadmin.conf \
             -O /etc/apache2/conf.d/phppgadmin.conf
     fi
-    wget $vestacp/pga/config.inc.php -O /etc/phppgadmin/config.inc.php
+    wget $vestacp_files_url/pga/config.inc.php -O /etc/phppgadmin/config.inc.php
 fi
 
 
@@ -1026,7 +1074,7 @@ fi
 #----------------------------------------------------------#
 
 if [ "$named" = 'yes' ]; then
-    wget $vestacp/bind/named.conf -O /etc/bind/named.conf
+    wget $vestacp_files_url/bind/named.conf -O /etc/bind/named.conf
     sed -i "s%listen-on%//listen%" /etc/bind/named.conf.options
     chown root:bind /etc/bind/named.conf
     chmod 640 /etc/bind/named.conf
@@ -1047,9 +1095,9 @@ fi
 
 if [ "$exim" = 'yes' ]; then
     gpasswd -a Debian-exim mail
-    wget $vestacp/exim/exim4.conf.template -O /etc/exim4/exim4.conf.template
-    wget $vestacp/exim/dnsbl.conf -O /etc/exim4/dnsbl.conf
-    wget $vestacp/exim/spam-blocks.conf -O /etc/exim4/spam-blocks.conf
+    wget $vestacp_files_url/exim/exim4.conf.template -O /etc/exim4/exim4.conf.template
+    wget $vestacp_files_url/exim/dnsbl.conf -O /etc/exim4/dnsbl.conf
+    wget $vestacp_files_url/exim/spam-blocks.conf -O /etc/exim4/spam-blocks.conf
     touch /etc/exim4/white-blocks.conf
 
     if [ "$spamd" = 'yes' ]; then
@@ -1082,8 +1130,8 @@ fi
 
 if [ "$dovecot" = 'yes' ]; then
     gpasswd -a dovecot mail
-    wget $vestacp/dovecot.tar.gz -O /etc/dovecot.tar.gz
-    wget $vestacp/logrotate/dovecot -O /etc/logrotate.d/dovecot
+    wget $vestacp_files_url/dovecot.tar.gz -O /etc/dovecot.tar.gz
+    wget $vestacp_files_url/logrotate/dovecot -O /etc/logrotate.d/dovecot
     cd /etc
     rm -rf dovecot dovecot.conf
     tar -xzf dovecot.tar.gz
@@ -1102,7 +1150,7 @@ fi
 if [ "$clamd" = 'yes' ]; then
     gpasswd -a clamav mail
     gpasswd -a clamav Debian-exim
-    wget $vestacp/clamav/clamd.conf -O /etc/clamav/clamd.conf
+    wget $vestacp_files_url/clamav/clamd.conf -O /etc/clamav/clamd.conf
     /usr/bin/freshclam
     update-rc.d clamav-daemon defaults
     if [ ! -d "/var/run/clamav" ]; then
@@ -1143,18 +1191,18 @@ fi
 
 if [ "$exim" = 'yes' ] && [ "$mysql" = 'yes' ]; then
     if [ "$apache" = 'yes' ]; then
-        wget $vestacp/roundcube/apache.conf -O /etc/roundcube/apache.conf
+        wget $vestacp_files_url/roundcube/apache.conf -O /etc/roundcube/apache.conf
         ln -s /etc/roundcube/apache.conf /etc/apache2/conf.d/roundcube.conf
     fi
-    wget $vestacp/roundcube/main.inc.php -O /etc/roundcube/main.inc.php
-    wget $vestacp/roundcube/db.inc.php -O /etc/roundcube/db.inc.php
+    wget $vestacp_files_url/roundcube/main.inc.php -O /etc/roundcube/main.inc.php
+    wget $vestacp_files_url/roundcube/db.inc.php -O /etc/roundcube/db.inc.php
     chmod 640 /etc/roundcube/debian-db-roundcube.php
     chmod 640 /etc/roundcube/config.inc.php
     chown root:www-data /etc/roundcube/debian-db-roundcube.php
     chown root:www-data /etc/roundcube/config.inc.php
-    wget $vestacp/roundcube/vesta.php -O \
+    wget $vestacp_files_url/roundcube/vesta.php -O \
         /usr/share/roundcube/plugins/password/drivers/vesta.php
-    wget $vestacp/roundcube/config.inc.php -O \
+    wget $vestacp_files_url/roundcube/config.inc.php -O \
         /etc/roundcube/plugins/password/config.inc.php
     r="$(gen_pass)"
     mysql -e "CREATE DATABASE roundcube"
@@ -1175,7 +1223,7 @@ if [ "$exim" = 'yes' ] && [ "$mysql" = 'yes' ]; then
     fi
     if [ "$release" -eq 8 ]; then
         # RoundCube tinyMCE fix
-        tinymceFixArchiveURL=$vestacp/roundcube/roundcube-tinymce.tar.gz
+        tinymceFixArchiveURL=$vestacp_files_url/roundcube/roundcube-tinymce.tar.gz
         tinymceParentFolder=/usr/share/roundcube/program/js
         tinymceFolder=$tinymceParentFolder/tinymce
         tinymceBadJS=$tinymceFolder/tiny_mce.js
@@ -1207,7 +1255,7 @@ fi
 
 if [ "$fail2ban" = 'yes' ]; then
     cd /etc
-    wget $vestacp/fail2ban.tar.gz -O fail2ban.tar.gz
+    wget $vestacp_files_url/fail2ban.tar.gz -O fail2ban.tar.gz
     tar -xzf fail2ban.tar.gz
     rm -f fail2ban.tar.gz
     if [ "$dovecot" = 'no' ]; then

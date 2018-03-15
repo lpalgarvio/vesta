@@ -1,23 +1,29 @@
 #!/bin/bash
+# Vesta Ubuntu installer v.05 for CentOS/RHEL
+# http://vestacp.com
 
-# Vesta RHEL/CentOS installer v.05
+
+#----------------------------------------------------------#
+#                  System information                      #
+#----------------------------------------------------------#
+
+memory=$(grep 'MemTotal' /proc/meminfo | tr ' ' '\n' | grep [0-9]);
+arch=$(uname -i);
+
 
 #----------------------------------------------------------#
 #                  Variables&Functions                     #
 #----------------------------------------------------------#
-export PATH=$PATH:/sbin
-RHOST='r.vestacp.com'
-CHOST='c.vestacp.com'
-REPO='cmmnt'
-VERSION='rhel'
-VESTA='/usr/local/vesta'
-memory=$(grep 'MemTotal' /proc/meminfo |tr ' ' '\n' |grep [0-9])
-arch=$(uname -i)
-os=$(cut -f 1 -d ' ' /etc/redhat-release)
-release=$(grep -o "[0-9]" /etc/redhat-release |head -n1)
-codename="${os}_$release"
-vestacp="http://$CHOST/$VERSION/$release"
+export PATH="$PATH:/sbin";
+VESTA='/usr/local/vesta';
+CHOST="c.vestacp.com";
+RHOST="r.vestacp.com";
+REPO='cmmnt';
+vestacp_files_url="https://$CHOST/$os/$release";
+vestacp_gpgkey_url="https://$CHOST/deb_signing.key";
+vestacp_repo_url="https://${RHOST}/${REPO}/${codename}";
 
+# Set software list
 if [ "$release" -eq 7 ]; then
     software="nginx httpd mod_ssl mod_ruid2 mod_fcgid php php-common php-cli
     php-bcmath php-gd php-imap php-mbstring php-mcrypt php-mysql php-pdo
@@ -60,8 +66,9 @@ help() {
   -t, --spamassassin      Install SpamAssassin  [yes|no]  default: yes
   -i, --iptables          Install Iptables      [yes|no]  default: yes
   -b, --fail2ban          Install Fail2ban      [yes|no]  default: yes
-  -r, --remi              Install Remi repo     [yes|no]  default: yes
+  -r, --repos             Install extra repos   [yes|no]  default: yes
   -o, --softaculous       Install Softaculous   [yes|no]  default: yes
+  -u, --upgrade           Upgrade system        [yes|no]  default: no
   -q, --quota             Filesystem Quota      [yes|no]  default: no
   -l, --lang              Default language                default: en
   -y, --interactive       Interactive install   [yes|no]  default: yes
@@ -147,8 +154,9 @@ for arg; do
         --spamassassin)         args="${args}-t " ;;
         --iptables)             args="${args}-i " ;;
         --fail2ban)             args="${args}-b " ;;
-        --remi)                 args="${args}-r " ;;
+        --repos)                args="${args}-r " ;;
         --softaculous)          args="${args}-o " ;;
+        --upgrade)              args="${args}-u " ;;
         --quota)                args="${args}-q " ;;
         --lang)                 args="${args}-l " ;;
         --interactive)          args="${args}-y " ;;
@@ -181,8 +189,9 @@ while getopts "a:n:w:v:j:k:m:g:d:x:z:c:t:i:b:r:o:q:l:y:s:e:p:fh" Option; do
         t) spamd=$OPTARG ;;             # SpamAssassin
         i) iptables=$OPTARG ;;          # Iptables
         b) fail2ban=$OPTARG ;;          # Fail2ban
-        r) remi=$OPTARG ;;              # Remi repo
+        r) repos=$OPTARG ;;             # Extra repos
         o) softaculous=$OPTARG ;;       # Softaculous plugin
+        u) upgrade=$OPTARG ;;           # Upgrade system
         q) quota=$OPTARG ;;             # FS Quota
         l) lang=$OPTARG ;;              # Language
         y) interactive=$OPTARG ;;       # Interactive install
@@ -216,8 +225,9 @@ else
 fi
 set_default_value 'iptables' 'yes'
 set_default_value 'fail2ban' 'yes'
-set_default_value 'remi' 'yes'
+set_default_value 'repos' 'yes'
 set_default_value 'softaculous' 'yes'
+set_default_value 'upgrade' 'no'
 set_default_value 'quota' 'no'
 set_default_value 'interactive' 'yes'
 set_default_lang 'en'
@@ -260,7 +270,7 @@ if [ ! -e '/usr/bin/wget' ]; then
 fi
 
 # Checking repository availability
-wget -q "$vestacp/GPG.txt" -O /dev/null
+wget -q "${vestacp_gpgkey_url}" -O /dev/null
 check_result $? "No access to Vesta repository"
 
 # Checking installed packages
@@ -451,38 +461,53 @@ fi
 #                  Install repositories                    #
 #----------------------------------------------------------#
 
-# Updating system packages
-yum -y update
-check_result $? 'yum update failed'
+# Package Management System repositories
+pms_repos="/etc/yum.repos.d";
+
+# Updating repository information
+yum makecache;
+
+# Upgrading system
+if [ "$upgrade" = 'yes' ]; then
+  yum -y update;
+  check_result $? 'yum update failed';
+fi;
 
 # Installing EPEL repository
-yum install epel-release -y
-check_result $? "Can't install EPEL repository"
+yum -y install epel-release;
+check_result $? "Can't install EPEL repository";
 
 # Installing Remi repository
-if [ "$remi" = 'yes' ]; then
-    rpm -Uvh --force $vestacp/remi-release.rpm
+if [ "$repos" = 'yes' ]; then
+    yum install -y http://rpms.remirepo.net/enterprise/remi-release-7.rpm;
     check_result $? "Can't install REMI repository"
-    sed -i "s/enabled=0/enabled=1/g" /etc/yum.repos.d/remi.repo
-fi
+fi;
 
-# Installing Nginx repository
-nrepo="/etc/yum.repos.d/nginx.repo"
-echo "[nginx]" > $nrepo
-echo "name=nginx repo" >> $nrepo
-echo "baseurl=http://nginx.org/packages/centos/$release/\$basearch/" >> $nrepo
-echo "gpgcheck=0" >> $nrepo
-echo "enabled=1" >> $nrepo
+# Installing nginx repo
+rpm --import https://nginx.org/keys/nginx_signing.key;
+bash -c "cat <<EOF > ${pms_repos}/nginx.repo
+# nginx repository
+[nginx]
+name=nginx repo
+baseurl=https://nginx.org/packages/mainline/${os}/${codename}/\$basearch/"
+gpgkey=https://nginx.org/keys/nginx_signing.key
+gpgcheck=1
+enabled=1
+EOF";
 
-# Installing Vesta repository
-vrepo='/etc/yum.repos.d/vesta.repo'
-echo "[vesta]" > $vrepo
-echo "name=Vesta - $REPO" >> $vrepo
-echo "baseurl=http://$RHOST/$REPO/$release/\$basearch/" >> $vrepo
-echo "enabled=1" >> $vrepo
-echo "gpgcheck=1" >> $vrepo
-echo "gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-VESTA" >> $vrepo
-wget $vestacp/GPG.txt -O /etc/pki/rpm-gpg/RPM-GPG-KEY-VESTA
+# Installing vesta repo
+rpm --import "${vestacp_gpgkey_url}";
+bash -c "cat <<EOF > ${pms_repos}/vesta.repo
+[vesta]
+name=Vesta - ${REPO}
+baseurl=${vestacp_repo_url}/\$basearch/
+gpgkey=${vestacp_gpgkey_url}
+gpgcheck=1
+enabled=1
+EOF";
+
+# Updating repository information
+yum makecache;
 
 
 #----------------------------------------------------------#
@@ -636,7 +661,7 @@ fi
 #----------------------------------------------------------#
 
 # Installing rpm packages
-if [ "$remi" = 'yes' ]; then
+if [ "$repos" = 'yes' ]; then
     yum -y --disablerepo=* \
         --enablerepo="*base,*updates,nginx,epel,vesta,remi*" \
         install $software
@@ -706,7 +731,7 @@ fi
 
 # Downlading sudo configuration
 mkdir -p /etc/sudoers.d
-wget $vestacp/sudo/admin -O /etc/sudoers.d/admin
+wget $vestacp_files_url/sudo/admin -O /etc/sudoers.d/admin
 chmod 440 /etc/sudoers.d/admin
 
 # Configuring system env
@@ -718,7 +743,7 @@ echo 'export PATH' >> /root/.bash_profile
 source /root/.bash_profile
 
 # Configuring logrotate for vesta logs
-wget $vestacp/logrotate/vesta -O /etc/logrotate.d/vesta
+wget $vestacp_files_url/logrotate/vesta -O /etc/logrotate.d/vesta
 
 # Buidling directory tree and creating some blank files for vesta
 mkdir -p $VESTA/conf $VESTA/log $VESTA/ssl $VESTA/data/ips \
@@ -826,12 +851,12 @@ echo "VERSION='0.9.8'" >> $VESTA/conf/vesta.conf
 
 # Downloading hosting packages
 cd $VESTA/data
-wget $vestacp/packages.tar.gz -O packages.tar.gz
+wget $vestacp_files_url/packages.tar.gz -O packages.tar.gz
 tar -xzf packages.tar.gz
 rm -f packages.tar.gz
 
 # Downloading templates
-wget $vestacp/templates.tar.gz -O templates.tar.gz
+wget $vestacp_files_url/templates.tar.gz -O templates.tar.gz
 tar -xzf templates.tar.gz
 rm -f templates.tar.gz
 
@@ -841,7 +866,7 @@ sed -i 's/%domain%/It worked!/g' /var/www/html/index.html
 
 # Downloading firewall rules
 chkconfig firewalld off >/dev/null 2>&1
-wget $vestacp/firewall.tar.gz -O firewall.tar.gz
+wget $vestacp_files_url/firewall.tar.gz -O firewall.tar.gz
 tar -xzf firewall.tar.gz
 rm -f firewall.tar.gz
 
@@ -872,12 +897,12 @@ rm /tmp/vst.pem
 
 if [ "$nginx" = 'yes' ]; then
     rm -f /etc/nginx/conf.d/*.conf
-    wget $vestacp/nginx/nginx.conf -O /etc/nginx/nginx.conf
-    wget $vestacp/nginx/status.conf -O /etc/nginx/conf.d/status.conf
-    wget $vestacp/nginx/phpmyadmin.inc -O /etc/nginx/conf.d/phpmyadmin.inc
-    wget $vestacp/nginx/phppgadmin.inc -O /etc/nginx/conf.d/phppgadmin.inc
-    wget $vestacp/nginx/webmail.inc -O /etc/nginx/conf.d/webmail.inc
-    wget $vestacp/logrotate/nginx -O /etc/logrotate.d/nginx
+    wget $vestacp_files_url/nginx/nginx.conf -O /etc/nginx/nginx.conf
+    wget $vestacp_files_url/nginx/status.conf -O /etc/nginx/conf.d/status.conf
+    wget $vestacp_files_url/nginx/phpmyadmin.inc -O /etc/nginx/conf.d/phpmyadmin.inc
+    wget $vestacp_files_url/nginx/phppgadmin.inc -O /etc/nginx/conf.d/phppgadmin.inc
+    wget $vestacp_files_url/nginx/webmail.inc -O /etc/nginx/conf.d/webmail.inc
+    wget $vestacp_files_url/logrotate/nginx -O /etc/logrotate.d/nginx
     echo > /etc/nginx/conf.d/vesta.conf
     mkdir -p /var/log/nginx/domains
     if [ "$release" -eq 7 ]; then
@@ -904,11 +929,11 @@ fi
 
 if [ "$apache" = 'yes'  ]; then
     cd /etc/httpd
-    wget $vestacp/httpd/httpd.conf -O conf/httpd.conf
-    wget $vestacp/httpd/status.conf -O conf.d/status.conf
-    wget $vestacp/httpd/ssl.conf -O conf.d/ssl.conf
-    wget $vestacp/httpd/ruid2.conf -O conf.d/ruid2.conf
-    wget $vestacp/logrotate/httpd -O /etc/logrotate.d/httpd
+    wget $vestacp_files_url/httpd/httpd.conf -O conf/httpd.conf
+    wget $vestacp_files_url/httpd/status.conf -O conf.d/status.conf
+    wget $vestacp_files_url/httpd/ssl.conf -O conf.d/ssl.conf
+    wget $vestacp_files_url/httpd/ruid2.conf -O conf.d/ruid2.conf
+    wget $vestacp_files_url/logrotate/httpd -O /etc/logrotate.d/httpd
     if [ $release -ne 7 ]; then
         echo "MEFaccept 127.0.0.1" >> conf.d/mod_extract_forwarded.conf
         echo > conf.d/proxy_ajp.conf
@@ -947,7 +972,7 @@ fi
 #----------------------------------------------------------#
 
 if [ "$phpfpm" = 'yes' ]; then
-    wget $vestacp/php-fpm/www.conf -O /etc/php-fpm.d/www.conf
+    wget $vestacp_files_url/php-fpm/www.conf -O /etc/php-fpm.d/www.conf
     chkconfig php-fpm on
     service php-fpm start
     check_result $? "php-fpm start failed"
@@ -976,7 +1001,7 @@ done
 #----------------------------------------------------------#
 
 if [ "$vsftpd" = 'yes' ]; then
-    wget $vestacp/vsftpd/vsftpd.conf -O /etc/vsftpd/vsftpd.conf
+    wget $vestacp_files_url/vsftpd/vsftpd.conf -O /etc/vsftpd/vsftpd.conf
     chkconfig vsftpd on
     service vsftpd start
     check_result $? "vsftpd start failed"
@@ -991,7 +1016,7 @@ fi
 #----------------------------------------------------------#
 
 if [ "$proftpd" = 'yes' ]; then
-    wget $vestacp/proftpd/proftpd.conf -O /etc/proftpd.conf
+    wget $vestacp_files_url/proftpd/proftpd.conf -O /etc/proftpd.conf
     chkconfig proftpd on
     service proftpd start
     check_result $? "proftpd start failed"
@@ -1022,7 +1047,7 @@ if [ "$mysql" = 'yes' ]; then
         service='mariadb'
     fi
 
-    wget $vestacp/$service/$mycnf -O /etc/my.cnf
+    wget $vestacp_files_url/$service/$mycnf -O /etc/my.cnf
     chkconfig $service on
     service $service start
     if [ "$?" -ne 0 ]; then
@@ -1046,9 +1071,9 @@ if [ "$mysql" = 'yes' ]; then
 
     # Configuring phpMyAdmin
     if [ "$apache" = 'yes' ]; then
-        wget $vestacp/pma/phpMyAdmin.conf -O /etc/httpd/conf.d/phpMyAdmin.conf
+        wget $vestacp_files_url/pma/phpMyAdmin.conf -O /etc/httpd/conf.d/phpMyAdmin.conf
     fi
-    wget $vestacp/pma/config.inc.conf -O /etc/phpMyAdmin/config.inc.php
+    wget $vestacp_files_url/pma/config.inc.conf -O /etc/phpMyAdmin/config.inc.php
     sed -i "s/%blowfish_secret%/$(gen_pass)/g" /etc/phpMyAdmin/config.inc.php
 fi
 
@@ -1062,19 +1087,19 @@ if [ "$postgresql" = 'yes' ]; then
         service postgresql start
         sudo -u postgres psql -c "ALTER USER postgres WITH PASSWORD '$vpass'"
         service postgresql stop
-        wget $vestacp/postgresql/pg_hba.conf -O /var/lib/pgsql/data/pg_hba.conf
+        wget $vestacp_files_url/postgresql/pg_hba.conf -O /var/lib/pgsql/data/pg_hba.conf
         service postgresql start
     else
         service postgresql initdb
-        wget $vestacp/postgresql/pg_hba.conf -O /var/lib/pgsql/data/pg_hba.conf
+        wget $vestacp_files_url/postgresql/pg_hba.conf -O /var/lib/pgsql/data/pg_hba.conf
         service postgresql start
         sudo -u postgres psql -c "ALTER USER postgres WITH PASSWORD '$vpass'"
     fi
     # Configuring phpPgAdmin
     if [ "$apache" = 'yes' ]; then
-        wget $vestacp/pga/phpPgAdmin.conf -O /etc/httpd/conf.d/phpPgAdmin.conf
+        wget $vestacp_files_url/pga/phpPgAdmin.conf -O /etc/httpd/conf.d/phpPgAdmin.conf
     fi
-    wget $vestacp/pga/config.inc.php -O /etc/phpPgAdmin/config.inc.php
+    wget $vestacp_files_url/pga/config.inc.php -O /etc/phpPgAdmin/config.inc.php
 fi
 
 
@@ -1083,7 +1108,7 @@ fi
 #----------------------------------------------------------#
 
 if [ "$named" = 'yes' ]; then
-    wget $vestacp/named/named.conf -O /etc/named.conf
+    wget $vestacp_files_url/named/named.conf -O /etc/named.conf
     chown root:named /etc/named.conf
     chmod 640 /etc/named.conf
     chkconfig named on
@@ -1098,9 +1123,9 @@ fi
 
 if [ "$exim" = 'yes' ]; then
     gpasswd -a exim mail
-    wget $vestacp/exim/exim.conf -O /etc/exim/exim.conf
-    wget $vestacp/exim/dnsbl.conf -O /etc/exim/dnsbl.conf
-    wget $vestacp/exim/spam-blocks.conf -O /etc/exim/spam-blocks.conf
+    wget $vestacp_files_url/exim/exim.conf -O /etc/exim/exim.conf
+    wget $vestacp_files_url/exim/dnsbl.conf -O /etc/exim/dnsbl.conf
+    wget $vestacp_files_url/exim/spam-blocks.conf -O /etc/exim/spam-blocks.conf
     touch /etc/exim/white-blocks.conf
 
     if [ "$spamd" = 'yes' ]; then
@@ -1133,8 +1158,8 @@ fi
 
 if [ "$dovecot" = 'yes' ]; then
     gpasswd -a dovecot mail
-    wget $vestacp/dovecot.tar.gz -O /etc/dovecot.tar.gz
-    wget $vestacp/logrotate/dovecot -O /etc/logrotate.d/dovecot
+    wget $vestacp_files_url/dovecot.tar.gz -O /etc/dovecot.tar.gz
+    wget $vestacp_files_url/logrotate/dovecot -O /etc/logrotate.d/dovecot
     cd /etc
     rm -rf dovecot dovecot.conf
     tar -xzf dovecot.tar.gz
@@ -1154,14 +1179,14 @@ if [ "$clamd" = 'yes' ]; then
     useradd clam -s /sbin/nologin -d /var/lib/clamav 2>/dev/null
     gpasswd -a clam exim
     gpasswd -a clam mail
-    wget $vestacp/clamav/clamd.conf -O /etc/clamd.conf
-    wget $vestacp/clamav/freshclam.conf -O /etc/freshclam.conf
+    wget $vestacp_files_url/clamav/clamd.conf -O /etc/clamd.conf
+    wget $vestacp_files_url/clamav/freshclam.conf -O /etc/freshclam.conf
     mkdir -p /var/log/clamav
     mkdir -p /var/run/clamav
     chown clam:clam /var/log/clamav /var/run/clamav
     chown -R clam:clam /var/lib/clamav
     if [ "$release" -eq '7' ]; then
-        wget $vestacp/clamav/clamd.service -O \
+        wget $vestacp_files_url/clamav/clamd.service -O \
             /usr/lib/systemd/system/clamd.service
         systemctl --system daemon-reload
     fi
@@ -1200,13 +1225,13 @@ fi
 
 if [ "$exim" = 'yes' ] && [ "$mysql" = 'yes' ]; then
     if [ "$apache" = 'yes' ]; then
-        wget $vestacp/roundcube/roundcubemail.conf \
+        wget $vestacp_files_url/roundcube/roundcubemail.conf \
             -O /etc/httpd/conf.d/roundcubemail.conf
     fi
-    wget $vestacp/roundcube/main.inc.php -O /etc/roundcubemail/config.inc.php
+    wget $vestacp_files_url/roundcube/main.inc.php -O /etc/roundcubemail/config.inc.php
     cd /usr/share/roundcubemail/plugins/password
-    wget $vestacp/roundcube/vesta.php -O drivers/vesta.php
-    wget $vestacp/roundcube/config.inc.php -O config.inc.php
+    wget $vestacp_files_url/roundcube/vesta.php -O drivers/vesta.php
+    wget $vestacp_files_url/roundcube/config.inc.php -O config.inc.php
     sed -i "s/localhost/$servername/g" \
         /usr/share/roundcubemail/plugins/password/config.inc.php
     chmod a+r /etc/roundcubemail/*
@@ -1232,7 +1257,7 @@ fi
 
 if [ "$fail2ban" = 'yes' ]; then
     cd /etc
-    wget $vestacp/fail2ban.tar.gz -O fail2ban.tar.gz
+    wget $vestacp_files_url/fail2ban.tar.gz -O fail2ban.tar.gz
     tar -xzf fail2ban.tar.gz
     rm -f fail2ban.tar.gz
     if [ "$dovecot" = 'no' ]; then
